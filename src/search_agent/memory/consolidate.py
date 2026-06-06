@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..db.models import Paper, UserProfile
 from ..embeddings import Embedder
+from ..observability.events import UPDATE, record_event
 from .reflect import ProposedStatement
 
 NEW_BASE = 0.5
@@ -71,11 +72,18 @@ def consolidate(
                     expires_at=expires,
                 )
             )
+            action = "new"
         else:
             bump = REPEAT_STEP + (HIGHLIGHT_BONUS if has_feedback else 0.0)
             existing.confidence = min(CONF_CAP, existing.confidence + bump)
             existing.evidence_ids = sorted(set(existing.evidence_ids) | set(ps.evidence_ids))
             existing.expires_at = expires  # refresh: continua vivo
+            action = "reinforced"
+        # E5: registra a mudança no perfil (o que entrou/subiu, e por quê).
+        record_event(
+            session, UPDATE, "user_profile",
+            {"action": action, "feedback": has_feedback, "evidence": str(ps.evidence_ids)},
+        )
     session.flush()
 
 

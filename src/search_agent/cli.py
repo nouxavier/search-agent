@@ -32,6 +32,7 @@ from .memory.consolidate import consolidate
 from .memory.graph import relational_neighbors
 from .memory.read_path import recall, rerank_by_profile
 from .memory.reflect import reflect
+from .observability.diff import memory_diff
 from .memory.write_path import (
     count_papers,
     create_run,
@@ -261,6 +262,67 @@ def ablation(
         typer.secho(f"  Δ: perfil DESCE os relevantes em {abs(ab.delta):.1f} posições (atrapalha aqui).", fg=typer.colors.RED)
     else:
         typer.secho("  Δ: sem diferença de posição.", dim=True)
+
+
+@app.command()
+def events(
+    n: int = typer.Option(20, "--n", "-n", help="Quantos eventos recentes mostrar."),
+    op: str = typer.Option(None, "--op", help="Filtra por op: write|read|update|delete."),
+) -> None:
+    """Event log da E5 (RFC §7.7): as últimas operações de memória, com o contexto."""
+    setup_logging()
+    sql = "SELECT ts, op, target, trigger_ctx FROM memory_events"
+    params: dict = {"n": n}
+    if op:
+        sql += " WHERE op=:op"
+        params["op"] = op
+    sql += " ORDER BY ts DESC LIMIT :n"
+    with session_scope() as session:
+        rows = session.execute(text(sql), params).all()
+    if not rows:
+        typer.secho("Nenhum evento registrado ainda. Rode um `agent run`/`query`.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=0)
+    _colors = {"write": typer.colors.GREEN, "read": typer.colors.BLUE,
+               "update": typer.colors.MAGENTA, "delete": typer.colors.RED}
+    typer.secho(f"\nÚltimos {len(rows)} eventos de memória:", bold=True)
+    for ts, ev_op, target, ctx in rows:
+        when = ts.strftime("%m-%d %H:%M:%S")
+        typer.secho(f"  {when}  {ev_op:<6}", fg=_colors.get(ev_op), nl=False)
+        typer.echo(f" {target}  {ctx or {}}")
+
+
+@app.command()
+def diff(
+    run_a: int = typer.Argument(..., metavar="RUN_A"),
+    run_b: int = typer.Argument(..., metavar="RUN_B"),
+) -> None:
+    """Memory diff (E5): o que mudou no store entre dois runs (papers/arestas/perfil)."""
+    setup_logging()
+    with session_scope() as session:
+        try:
+            d = memory_diff(session, run_a, run_b)
+        except ValueError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
+    typer.secho(f"\nMemory diff: run {d.earlier_run} → run {d.later_run}", bold=True)
+    typer.secho(f"\n+ {len(d.papers_added)} papers novos", fg=typer.colors.GREEN)
+    for pid, title in d.papers_added[:15]:
+        typer.echo(f"    id={pid}  {title[:70]}")
+    if len(d.papers_added) > 15:
+        typer.echo(f"    … (+{len(d.papers_added) - 15})")
+    typer.secho(f"+ {d.edges_added} arestas novas", fg=typer.colors.GREEN)
+    if d.profile_added:
+        typer.secho(f"+ {len(d.profile_added)} preferências novas", fg=typer.colors.MAGENTA)
+        for s in d.profile_added:
+            typer.echo(f"    · {s}")
+    if d.profile_expired:
+        typer.secho(f"- {len(d.profile_expired)} preferências expiraram", fg=typer.colors.YELLOW)
+        for s in d.profile_expired:
+            typer.echo(f"    · {s}")
+    if d.events_by_op:
+        resumo = " · ".join(f"{op}={n}" for op, n in sorted(d.events_by_op.items()))
+        typer.secho(f"\neventos na janela: {resumo}", dim=True)
 
 
 @app.command()

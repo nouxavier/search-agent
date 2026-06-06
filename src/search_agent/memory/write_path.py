@@ -20,6 +20,7 @@ from ..sources.base import RawPaper
 from .graph import populate_edges
 from .identity import canonical_key, normalize_doi
 from ..db.models import ExternalId, Paper, Run, RunPaper, Source
+from ..observability.events import WRITE, record_event
 
 log = get_logger("search_agent.write_path")
 
@@ -110,6 +111,11 @@ def ingest(
     log.info(
         "write.persist",
         extra={"paper_id": paper_id, "key": key, "new": is_new, "source": raw.source_name},
+    )
+    # E5: registra a escrita no event log (com o porquê).
+    record_event(
+        session, WRITE, f"papers/{paper_id}",
+        {"new": is_new, "source": raw.source_name, "year": raw.year},
     )
     return paper_id
 

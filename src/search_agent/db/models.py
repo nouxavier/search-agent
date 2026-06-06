@@ -206,3 +206,22 @@ class Feedback(Base):
     )
 
     __table_args__ = (UniqueConstraint("paper_id", "run_id", "signal"),)
+
+
+# ── E5: observability (event log) ───────────────────────────────────────────
+
+
+class MemoryEvent(Base):
+    """Registro de uma operação de memória (§7.7): write | read | update | delete,
+    com o contexto que a disparou. Não tem FK — é log append-only, sobrevive à
+    deleção do alvo (pra você ainda conseguir auditar o que foi apagado)."""
+
+    __tablename__ = "memory_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    op: Mapped[str] = mapped_column(Text, nullable=False)      # write | read | update | delete
+    target: Mapped[str] = mapped_column(Text, nullable=False)  # tabela/registro afetado
+    trigger_ctx: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
