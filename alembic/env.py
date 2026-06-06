@@ -19,11 +19,10 @@ config.set_main_option("sqlalchemy.url", get_settings().db.url)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support. Os modelos entram na E1 (camada episodic).
-# from search_agent.db.models import Base
-# target_metadata = Base.metadata
-target_metadata = None
+# add your model's MetaData object here for 'autogenerate' support.
+from search_agent.db.models import Base
+
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
