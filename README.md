@@ -9,6 +9,10 @@ lembra o que já viu entre execuções. Veja [docs/](docs/) para o plano complet
 [search-project.md](docs/search-project.md) (conceito), [plano-implementacao.md](docs/plano-implementacao.md)
 (engenharia) e [rfc-memory-layer.md](docs/rfc-memory-layer.md) (spec técnica).
 
+> 📚 **Novo no assunto?** O [guia de estudo — embeddings e grafos](docs/guia-estudo-embeddings-grafos.md)
+> explica do zero, com analogias e o código lado a lado, como o agente acha o que é
+> *parecido* (embeddings) e o que é *relacionado* (grafos).
+
 **Fase atual: E2** — reflexão e consolidação (episodic → semantic). Sobre a E1
 (dedup canônica + write/read path), o agente agora **reflete** sobre cada run —
 com *grounding* obrigatório em arxiv_ids concretos — e abstrai um `user_profile`
