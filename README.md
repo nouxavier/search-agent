@@ -4,34 +4,37 @@ Camada de memória persistente para um agente de pesquisa — construída por fa
 (`E0…E5`), implementando na prática os conceitos de *Memory for Autonomous LLM
 Agents* (Du, 2026, arXiv:2603.07670).
 
-O agente busca papers no arXiv, normaliza, gera embeddings e — a partir da E1 —
-lembra o que já viu entre execuções. Veja [docs/](docs/) para o plano completo:
-[search-project.md](docs/search-project.md) (conceito), [plano-implementacao.md](docs/plano-implementacao.md)
-(engenharia) e [rfc-memory-layer.md](docs/rfc-memory-layer.md) (spec técnica).
+O agente busca papers no arXiv, normaliza, gera embeddings e **lembra o que já viu
+entre execuções**: deduplica, aprende suas preferências, conecta papers por relação,
+mede se a memória ajuda e registra toda operação pra auditoria.
 
 > 📚 **Novo no assunto?** O [guia de estudo — embeddings e grafos](docs/guia-estudo-embeddings-grafos.md)
 > explica do zero, com analogias e o código lado a lado, como o agente acha o que é
 > *parecido* (embeddings) e o que é *relacionado* (grafos).
 
-**Fase atual: E2** — reflexão e consolidação (episodic → semantic). Sobre a E1
-(dedup canônica + write/read path), o agente agora **reflete** sobre cada run —
-com *grounding* obrigatório em arxiv_ids concretos — e abstrai um `user_profile`
-de preferências que **evolui** (confidence + expiração) e **re-ranqueia** o
-digest/consulta. `agent feedback` marca um paper como relevante, sinal que move o
-perfil. Requer Postgres + migração aplicada (veja Setup); `agent reflect` usa o
-Claude — por padrão pela sua **assinatura Pro/Max** (sem API key), ou pela API paga
-(veja [Como o agente fala com o Claude](#como-o-agente-fala-com-o-claude)).
+**Status: E0→E5 completo.** O arco inteiro do plano:
+
+| Fase | O que dá ao agente |
+|---|---|
+| E0–E1 | lembra (dedup canônica + *"o que já vi sobre X?"*) |
+| E2 | aprende seu gosto (perfil que evolui e re-ranqueia) |
+| E3 | conecta por relação (grafo de arestas) |
+| E4 | **mede** se a memória ajuda (metric stack + ablation) |
+| E5 | **explica** o que a memória fez (event log + diff) |
+
+Mais a fundo em [docs/](docs/): [search-project.md](docs/search-project.md) (conceito),
+[plano-implementacao.md](docs/plano-implementacao.md) (engenharia),
+[rfc-memory-layer.md](docs/rfc-memory-layer.md) (spec técnica).
 
 ## O que o Ollama faz aqui
 
-O Ollama roda um modelo de IA **localmente** (sem API, sem chave, sem nuvem) e tem
-uma função só no projeto: **transformar texto em embedding** — um vetor de 1024
-números que representa o *significado* do paper (título + abstract). É o `embedding:
-dim=1024` que aparece na saída. Esses vetores são o que vai permitir, a partir da
-E1, busca por similaridade (*"o que já vi sobre X?"*, *"esse paper é parecido com
-aquele de 3 semanas atrás"*) — comparando significado, não palavras exatas. O
-modelo usado é o **bge-m3** (multilíngue, 1024d, grátis/offline); é trocável por
-outro embedder (ex.: Voyage AI) atrás da interface `Embedder` sem mexer no pipeline.
+O Ollama roda um modelo de IA **localmente** (sem API, sem chave, sem nuvem) com uma
+função só: **transformar texto em embedding** — um vetor de 1024 números que
+representa o *significado* do paper (título + abstract). Esses vetores viabilizam a
+busca por similaridade (*"o que já vi sobre X?"*) — comparando significado, não
+palavras exatas. O modelo é o **bge-m3** (multilíngue, 1024d, grátis/offline);
+trocável por outro embedder (ex.: Voyage AI) atrás da interface `Embedder` sem mexer
+no pipeline.
 
 ---
 
@@ -42,8 +45,8 @@ outro embedder (ex.: Voyage AI) atrás da interface `Embedder` sem mexer no pipe
 | **Python 3.12+** | runtime | já vem / `brew install python@3.12` |
 | **uv** | deps + venv | `brew install uv` |
 | **Ollama** | embeddings (bge-m3, local/offline) | `brew install --cask ollama-app` — **veja a nota abaixo** |
-| **Docker** | Postgres + pgvector (usado a partir da E1) | Docker Desktop |
-| **Claude** (LLM) | `smoke` / `reflect` (E2+) | assinatura **Pro/Max** via `claude` (padrão, sem key) **ou** API key — [detalhes](#como-o-agente-fala-com-o-claude) |
+| **Docker** | Postgres + pgvector | Docker Desktop |
+| **Claude** (LLM) | `smoke` / `reflect` | assinatura **Pro/Max** via `claude` (padrão, sem key) **ou** API key — [detalhes](#como-o-agente-fala-com-o-claude) |
 
 > ### ⚠️ Ollama: use o **cask**, não a formula
 > A formula do Homebrew (`brew install ollama`) instala mas o runtime vem
@@ -67,120 +70,117 @@ uv sync
 # 2. baixar o modelo de embedding (~1.2 GB, uma vez)
 ollama pull bge-m3
 
-# 3. subir o Postgres e aplicar o schema (E1 em diante)
+# 3. subir o Postgres e aplicar o schema
 docker compose up -d
 uv run alembic upgrade head
 ```
 
 ---
 
-## Rodar
-
-Antes de cada sessão, garanta que o Ollama está no ar:
-
-```bash
-# abra o app Ollama (menu bar) OU rode o servidor manualmente:
-ollama serve &
-
-# confirme:
-curl -s localhost:11434/api/version          # → {"version":"..."}
-```
-
-### Os comandos numa olhada
+## Os comandos
 
 Pensa no agente como um **assistente de pesquisa** com memória. Cada comando é uma
 ordem que você dá pra ele:
 
-| Comando | Em uma frase | O que faz com a memória |
+| Comando | Em uma frase | Papel |
 |---|---|---|
-| `agent run` | *"Vai ao arXiv, traz papers novos e arquiva."* | **escreve** — entra coisa nova |
-| `agent query` | *"Me lembra o que já vimos sobre X."* | **lê** — só consulta o que já está guardado |
-| `agent feedback` | *"Esse paper aqui me foi útil, anota."* | **ensina** — marca um paper como relevante |
-| `agent reflect` | *"Pensa no último run e anota meus interesses."* | **ensina** — o Claude resume teus gostos |
-| `agent profile` | *"Me diz o que você entendeu que eu gosto."* | **mostra** — lista as preferências acumuladas |
-| `agent smoke` | *"Teste de microfone: o Claude tá me ouvindo?"* | **nada** — só checa a conexão com o LLM |
+| `agent run` | *"Vai ao arXiv, traz papers novos e arquiva."* | **escreve** na memória |
+| `agent query` | *"Me lembra o que já vimos sobre X."* | **lê** da memória |
+| `agent feedback` | *"Esse aqui me serviu / é ruído."* (up·down·star) | **ensina** o gosto |
+| `agent reflect` | *"Pensa no run e anota meus interesses."* | **ensina** (via Claude) |
+| `agent profile` | *"Me diz o que entendeu que eu gosto."* | **mostra** o perfil |
+| `agent metrics` | *"A memória está ajudando? Com número."* | **mede** |
+| `agent ablation` | *"O perfil puxa peso no ranking?"* | **mede** (isola componente) |
+| `agent diff` | *"O que mudou no store entre dois runs?"* | **audita** |
+| `agent events` | *"Mostra as últimas operações de memória."* | **audita** |
+| `agent smoke` | *"O Claude tá me ouvindo?"* | testa o LLM |
 
 O fio condutor: **`run` põe coisa na memória, `query` tira. `feedback` e `reflect`
-moldam o *gosto* do agente (o `user_profile`), e esse gosto re-ordena os próximos
-`run`/`query` — papers alinhados ao perfil sobem.** `profile` é só a janela pra ver
-esse gosto; `smoke` é um teste técnico que não mexe em nada.
+moldam o *gosto* (o `user_profile`), e esse gosto re-ordena os próximos `run`/`query`.**
+`metrics`/`ablation` dizem se está valendo; `diff`/`events` explicam o que aconteceu.
 
-Ordem típica de uma sessão. O passo 1 **imprime os ids** que os passos 2 e 3 usam —
-cada paper sai com um `id=` e o run inteiro com um `run #`:
+---
+
+## Operação no dia a dia
+
+### Antes de cada sessão — ligar a infra
+
+```bash
+docker compose up -d                         # Postgres
+ollama serve &                               # ou abra o app Ollama (menu bar)
+curl -s localhost:11434/api/version          # confirma o Ollama: {"version":"..."}
+```
+
+O Claude você já está logado (Max), então `reflect` funciona sem API key.
+
+### De manhã — buscar o que há de novo
+
+```bash
+uv run agent run -a "retrieval augmented generation"   # -n N limita a quantidade
+```
+
+Traz papers novos (sem repetir o que já viu), re-ranqueados pelo seu perfil, com as
+pontes relacionais do grafo. A saída imprime os `id=` e o `run #` que você usa depois:
 
 ```text
-[3] Beyond Vector Similarity: A Structural Analysis of Graph-Augmented Retrieval...
-    id=27  arxiv_id=2606.06003  year=2026  Grama Chethan          ← esse 27 é o <paper_id>
+[1] Graph-Augmented Retrieval for Knowledge Graphs
+    id=27  arxiv_id=2606.06003  year=2026  Grama Chethan
+    ↳ conecta-se a "QCFuse: Query-Aware Cache Fusion…" (id=29) via same_subarea
 ...
-✓ digest: 5 novos de 5 candidatos · store agora tem 11 papers.
-  (run #5 · use `agent reflect 5` para refletir)                 ← esse 5 é o <run_id>
+✓ digest: 5 novos de 5 candidatos · store agora tem 26 papers.
+  (run #9 · use `agent reflect 9` para refletir)
 ```
+
+### Ao longo do dia — ensinar e consultar
 
 ```bash
-uv run agent run -a "retrieval augmented generation" -n 5   # 1. traz e arquiva → imprime os ids (veja acima)
-uv run agent feedback <paper_id>                            # 2. (opcional) "gostei desse" — um id do passo 1, ex.: 27
-uv run agent reflect <run_id>                               # 3. reflete sobre aquele run (o run #) → atualiza o perfil
-uv run agent profile                                        # 4. confere o que ele aprendeu
-uv run agent query "graph retrieval"                        # 5. consulta — já reordenado pelo perfil
+uv run agent feedback 27 -s up      # "me serviu"  (-s star pros TOP, -s down pra ruído)
+uv run agent query "o que já vi sobre memória de agentes?"   # busca no que já leu
+uv run agent query "graph retrieval" -k 5 --no-profile       # top-5, só similaridade
 ```
 
-### Pipeline principal — `agent run`
+`query` mostra `sim≈` (à consulta), `perfil≈` (afinidade ao perfil) e `score` (mistura).
 
-Busca no arXiv, **grava** com dedup canônica e mostra só o que é novo (papers já
-surfaceados em runs anteriores não voltam):
+### Fim do dia/semana — consolidar e revisar
 
 ```bash
-uv run agent run                                    # área default (config.toml)
-uv run agent run --area "memory for LLM agents" --limit 10
-uv run agent run -a "retrieval augmented generation" -n 5
+uv run agent reflect 9        # o Claude lê o run #9 e atualiza seu perfil (grounded)
+uv run agent profile          # confere o que ele aprendeu (preferências + confidence)
 ```
 
-Saída: um bloco por paper novo, terminando em `✓ digest: N novos de M candidatos ·
-store agora tem T papers`. Rodar de novo na mesma área → `Nada novo desde o último run`.
+Cada preferência expira (anti *self-reinforcing error*) e ganha confidence quando
+reaparece ou recebe feedback.
 
-### Recuperar do histórico — `agent query`
-
-Read path: "o que já vi sobre X?" por similaridade de embedding.
+### Manutenção/insight (semanal)
 
 ```bash
-uv run agent query "trustworthy memory search for agents"
-uv run agent query "retrieval augmented generation" -k 5
-uv run agent query "long-horizon agents" --area "memory"   # filtro por título
-uv run agent query "agent memory" --no-profile             # só similaridade, sem re-rank
+uv run agent metrics                       # effectiveness, ruído, tamanho, latência
+uv run agent ablation "<consulta típica>"  # o perfil sobe os papers relevantes?
+uv run agent diff 5 9                       # o que mudou no store entre os runs 5 e 9
+uv run agent events --op update            # auditar: por que o perfil mudou?
 ```
 
-A saída traz `sim≈` (similaridade à consulta), `perfil≈` (afinidade ao
-`user_profile`) e `score` (mistura usada na ordenação).
+### Cola rápida
 
-### Reflexão e perfil — `reflect` / `feedback` / `profile` (E2)
+| Ritmo | Comandos |
+|---|---|
+| Todo dia | `run` → `feedback` → `query` (quando precisar) |
+| Semanal | `reflect` → `profile` → `metrics` |
+| Investigar algo estranho | `diff`, `events`, `ablation` |
 
-```bash
-# 1. marca um paper do digest como relevante (sinal que move o perfil)
-uv run agent feedback <paper_id>           # paper_id aparece no `run`/`query`
+**Notas de operação**
+- **Onde mora seu conhecimento:** tudo no Postgres do compose. Backup = `pg_dump`.
+  Apagar um paper apaga tudo dele em cascata (governança, E4).
+- **Custo:** `run`/`query` não tocam o LLM (só arXiv + Ollama, grátis). Só `reflect`
+  chama o Claude — e pela sua **Max**, sem gastar API.
+- **Automação:** o `run` diário é candidato a agendamento — um cron chamando
+  `uv run agent run`, ou os fluxos `/schedule`/`/loop` do Claude Code.
 
-# 2. reflete sobre um run → gera nota grounded e atualiza o user_profile
-uv run agent reflect <run_id>               # usa o Claude (run_id é impresso no `run`)
-                                            # provider em config.toml — Max por padrão, sem key
+---
 
-# 3. inspeciona as preferências vigentes
-uv run agent profile
-```
+## Como o agente fala com o Claude
 
-O perfil passa a influenciar o ranking do próximo `run`/`query`. Cada statement
-expira (anti *self-reinforcing error*) e ganha confidence quando reaparece ou
-recebe feedback.
-
-### Sem Ollama (offline) — embedder fake
-
-Vetor determinístico, não-semântico — pro pipeline rodar sem o modelo:
-
-```bash
-SEARCH_AGENT__EMBEDDER__PROVIDER=fake uv run agent run -n 3
-```
-
-### Como o agente fala com o Claude
-
-O `reflect` e o `smoke` precisam do Claude. Tem dois jeitos, escolhidos pelo
+O `reflect` e o `smoke` precisam do Claude. Tem três modos, escolhidos pelo
 `provider` em `[llm]` no [config.toml](config.toml):
 
 | `provider` | Como cobra | Precisa de quê |
@@ -189,17 +189,10 @@ O `reflect` e o `smoke` precisam do Claude. Tem dois jeitos, escolhidos pelo
 | `anthropic` | crédito **pay-as-you-go** da API | `ANTHROPIC_API_KEY` no `.env` |
 | `fake` | — | nada (resposta fixa, pra testes) |
 
-O modo padrão (`claude_cli`) roteia pelo binário `claude -p`, então usa o login da
-sua assinatura — **não gasta API key**. Pré-requisito: ter o Claude Code instalado e
-logado.
+O modo padrão roteia pelo binário `claude -p`, usando o login da sua assinatura —
+**não gasta API key**. Teste com `uv run agent smoke` (→ `Ok, search-agent.`).
 
-```bash
-# teste rápido de que o LLM responde (usa o provider do config.toml):
-uv run agent smoke                     # → LLM (claude-haiku-4-5): Ok, search-agent.
-```
-
-**Usar a API paga em vez da assinatura** — copie `.env.example` para `.env`, ponha a
-chave, e troque o provider:
+**Usar a API paga** em vez da assinatura:
 
 ```bash
 cp .env.example .env                   # edite e cole ANTHROPIC_API_KEY=sk-ant-...
@@ -210,31 +203,14 @@ SEARCH_AGENT__LLM__PROVIDER=anthropic uv run agent smoke   # pontual
 > O `.env` é carregado automaticamente e fica fora do git. No modo `claude_cli` a
 > `ANTHROPIC_API_KEY` é ignorada de propósito (pra cobrança ir pra assinatura).
 
-### Testes
-
-```bash
-uv run pytest                # suíte do adapter arXiv
-```
-
-### Infra (Postgres + pgvector)
-
-Sobe na E0, mas só é usado para gravar a partir da E1:
-
-```bash
-docker compose up -d
-docker compose exec db psql -U search -d search_agent \
-  -c "SELECT extversion FROM pg_extension WHERE extname='vector';"
-docker compose down          # parar
-```
-
 ---
 
 ## Configuração
 
-Os defaults (idioma, área, threshold, modelo de embedding/LLM, URL do banco)
-vivem em [config.toml](config.toml) — versionado, não no prompt. Sobrescreva por
-variável de ambiente com o prefixo `SEARCH_AGENT__` e `__` como separador
-aninhado:
+Os defaults (idioma, área, threshold, modelos, URL do banco) vivem em
+[config.toml](config.toml) — versionado, não no prompt. Sobrescreva por variável de
+ambiente com o prefixo `SEARCH_AGENT__` e `__` como separador aninhado (o env
+**sobrepõe** o toml):
 
 ```bash
 SEARCH_AGENT__EMBEDDER__PROVIDER=fake \
@@ -242,30 +218,72 @@ SEARCH_AGENT__AGENT__PAPERS_PER_RUN=20 \
 uv run agent run
 ```
 
+`EMBEDDER__PROVIDER=fake` dá um embedder offline (vetor determinístico, não-semântico)
+pra rodar o pipeline sem Ollama — útil em testes.
+
+### Quais temas o agente busca
+
+Dois níveis no [config.toml](config.toml) controlam o que entra na busca:
+
+```toml
+[agent]
+default_area = "LLM Agents"          # o ASSUNTO — vira a query no arXiv (sem -a)
+
+[source]
+categories = ["cs.AI", "cs.CL", "cs.LG"]   # o UNIVERSO — categorias do arXiv onde procurar
+```
+
+A `default_area` é *o quê* (o tema); as `categories` são *o onde* (cs.AI = IA,
+cs.CL = linguagem/NLP, cs.LG = machine learning). **Ver** o tema atual = olhar o
+`config.toml`. **Mudar**:
+
+```bash
+uv run agent run -a "retrieval augmented generation"   # só neste run (não edita nada)
+# ou edite default_area no config.toml pra fixar de vez
+```
+
+> A *área* diz **onde** o agente pesca; o *perfil* (`user_profile`, construído por
+> `feedback`/`reflect`) diz **quais peixes** ele te mostra primeiro. Veja o perfil
+> com `agent profile`.
+
+---
+
+## Testes e infra
+
+```bash
+uv run pytest                # suíte completa (usa Postgres efêmero via testcontainers)
+
+docker compose up -d         # subir o banco
+docker compose down          # parar
+```
+
 ---
 
 ## Estrutura
 
-```
+```text
 src/search_agent/
-├── cli.py            # Typer: run / query / reflect / feedback / profile / smoke
-├── config.py         # pydantic-settings (lê config.toml + env)
+├── cli.py            # Typer: run/query/feedback/reflect/profile/metrics/ablation/diff/events/smoke
+├── config.py         # pydantic-settings (config.toml + env; env sobrepõe)
 ├── sources/          # adapters de fonte → RawPaper canônico (base.py + arxiv.py)
 ├── db/
-│   ├── models.py     # schema ORM (papers, external_ids, sources, runs, run_papers,
-│   │                 #   reflections, user_profile)
+│   ├── models.py     # ORM: papers, external_ids, sources, runs, run_papers,
+│   │                 #   reflections, user_profile, edges, feedback, memory_events
 │   ├── session.py    # engine + session_scope
 │   └── queries.py    # SQL cru de retrieval (vetor kNN + metadata)
 ├── memory/
 │   ├── identity.py   # chave canônica (DOI → hash) — dedup cross-source
-│   ├── write_path.py # filter → dedup/merge → tag → persist → link run (§7.1)
+│   ├── write_path.py # filter → dedup/merge → persist → edges → link run (§7.1)
 │   ├── read_path.py  # recall + re-rank por perfil (§7.2 / E2)
-│   ├── reflect.py    # reflexão grounded pós-run (§4.3)
-│   └── consolidate.py# reflexões → user_profile + afinidade (§9.1)
+│   ├── graph.py      # arestas + travessia relacional (§3.2 / E3)
+│   ├── reflect.py    # reflexão grounded pós-run (§4.3 / E2)
+│   └── consolidate.py# reflexões → user_profile + afinidade (§9.1 / E2)
+├── eval/             # E4: metrics.py (metric stack) + ablation.py (perfil on/off)
+├── observability/    # E5: events.py (event log) + diff.py (memory diff)
 ├── embeddings.py     # Embedder: OllamaEmbedder (bge-m3) | FakeEmbedder
 ├── llm.py            # LLMClient: AnthropicClient | ClaudeCliClient (Max) | FakeLLM
 └── logging_setup.py  # logging JSON
-alembic/              # migrações versionadas (0001_e1_episodic, 0002_e2_semantic)
+alembic/versions/     # 0001_e1_episodic … 0005_e5_observability
 docker-compose.yml    # Postgres 16 + pgvector
 config.toml           # defaults versionados
 ```
