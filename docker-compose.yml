@@ -1,0 +1,22 @@
+# Postgres 16 + pgvector — store único (estruturado + vetorial), §3.2 / §4.2.
+# Na E0 ele sobe mas ainda não é usado para gravar (persistência entra na E1).
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: search_agent_db
+    environment:
+      POSTGRES_USER: search
+      POSTGRES_PASSWORD: search
+      POSTGRES_DB: search_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U search -d search_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

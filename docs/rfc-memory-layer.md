@@ -410,7 +410,7 @@ Detalhado em [plano-implementacao.md](plano-implementacao.md). Resumo:
 2. **Threshold de filtragem** do write path: fixo no `config.toml` ou função do volume do run? (decidir em E1; medir em E4).
 3. **`same_subarea` em E3**: clustering de embeddings (HDBSCAN/k-means) ou tag declarada? Começar com tag, evoluir se preciso.
 4. **Citações (`cites`)**: arXiv não dá grafo de citação direto. Adiar `cites` para quando entrar um adapter (Semantic Scholar) que forneça, ou parsear referências do PDF? (não bloqueia E3; `same_author`/`same_subarea` já entregam o DoD).
-5. **Dimensão do embedding** acoplada à coluna `VECTOR(384)`: trocar de embedder = migração. Aceitável agora; documentar.
+5. **Dimensão do embedding** acoplada à coluna `VECTOR(1024)` (BGE-M3): trocar de embedder com outra dimensão = migração + re-embed de todo o store. Aceitável agora; documentar. Manter o nome do modelo em `config.toml` para detectar incompatibilidade.
 
 ---
 
