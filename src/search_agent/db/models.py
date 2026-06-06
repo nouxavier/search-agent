@@ -25,6 +25,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -157,3 +158,70 @@ class UserProfile(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ── E3: substrate relacional (arestas entre papers) ─────────────────────────
+
+
+class Edge(Base):
+    """Relação entre dois papers (§3.2). `kind`: same_author | same_subarea | cites.
+    Não-direcionadas guardadas canonicamente (src_id < dst_id); `cites` é direcionada.
+    `weight` carrega a força (p/ same_subarea, a similaridade de embedding)."""
+
+    __tablename__ = "edges"
+
+    src_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+    )
+    dst_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+    )
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+# ── E4: avaliação (feedback explícito) ──────────────────────────────────────
+
+
+class Feedback(Base):
+    """Sinal de utilidade por paper (§5): up | down | star. Base do metric stack —
+    up/star = surfaceado e útil; down = recuperado mas inútil. `run_id` sobrevive
+    ao run (SET NULL). PK surrogate + UNIQUE (ver migração 0004 pro porquê)."""
+
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    paper_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("runs.id", ondelete="SET NULL")
+    )
+    signal: Mapped[str] = mapped_column(Text, nullable=False)  # up | down | star
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("paper_id", "run_id", "signal"),)
+
+
+# ── E5: observability (event log) ───────────────────────────────────────────
+
+
+class MemoryEvent(Base):
+    """Registro de uma operação de memória (§7.7): write | read | update | delete,
+    com o contexto que a disparou. Não tem FK — é log append-only, sobrevive à
+    deleção do alvo (pra você ainda conseguir auditar o que foi apagado)."""
+
+    __tablename__ = "memory_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    op: Mapped[str] = mapped_column(Text, nullable=False)      # write | read | update | delete
+    target: Mapped[str] = mapped_column(Text, nullable=False)  # tabela/registro afetado
+    trigger_ctx: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

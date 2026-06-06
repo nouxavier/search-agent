@@ -17,8 +17,10 @@ from sqlalchemy.orm import Session
 from ..embeddings import Embedder
 from ..logging_setup import get_logger
 from ..sources.base import RawPaper
+from .graph import populate_edges
 from .identity import canonical_key, normalize_doi
 from ..db.models import ExternalId, Paper, Run, RunPaper, Source
+from ..observability.events import WRITE, record_event
 
 log = get_logger("search_agent.write_path")
 
@@ -83,6 +85,8 @@ def ingest(
         session.execute(
             Paper.__table__.update().where(Paper.id == paper_id).values(embedding=vec)
         )
+        # E3: liga o paper novo ao resto do store (same_author + same_subarea).
+        populate_edges(session, paper_id)
 
     # external_ids: doi (normalizado) + todos os ids por fonte, como aliases
     aliases: dict[str, str] = {}
@@ -107,6 +111,11 @@ def ingest(
     log.info(
         "write.persist",
         extra={"paper_id": paper_id, "key": key, "new": is_new, "source": raw.source_name},
+    )
+    # E5: registra a escrita no event log (com o porquê).
+    record_event(
+        session, WRITE, f"papers/{paper_id}",
+        {"new": is_new, "source": raw.source_name, "year": raw.year},
     )
     return paper_id
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..db.queries import Hit, search_similar
 from ..embeddings import Embedder
+from ..observability.events import READ, record_event
 from .consolidate import active_profile, affinity, embeddings_for
 
 # Peso do perfil na mistura final (0 = só similaridade à consulta).
@@ -57,6 +58,11 @@ def recall(
         ranked.append(RankedHit(hit=h, base_sim=base, profile_affinity=aff, score=score))
 
     ranked.sort(key=lambda r: r.score, reverse=True)
+    # E5: registra a leitura (consulta, tamanho do pool, se o perfil entrou).
+    record_event(
+        session, READ, "recall",
+        {"query": query_text[:120], "k": k, "pool": len(pool), "profile": bool(profile)},
+    )
     return ranked[:k]
 
 
