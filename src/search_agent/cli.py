@@ -33,6 +33,7 @@ from .memory.graph import relational_neighbors
 from .memory.read_path import recall, rerank_by_profile
 from .memory.reflect import reflect
 from .observability.diff import memory_diff
+from .rag import ask as rag_ask
 from .memory.write_path import (
     count_papers,
     create_run,
@@ -119,6 +120,36 @@ def query(
         snippet = _snippet(r.hit.abstract)
         if snippet:
             typer.secho(f"    {snippet}", dim=True)
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., metavar="QUESTION", help="Pergunta a responder com base no store."),
+    k: int = typer.Option(5, "--k", "-k", help="Quantos papers recuperar como contexto."),
+    no_profile: bool = typer.Option(False, "--no-profile", help="Ignora o perfil (só similaridade)."),
+) -> None:
+    """RAG: recupera os k papers mais relevantes e o LLM responde grounded neles (citando arxiv_id)."""
+    setup_logging()
+    cfg = get_settings()
+    embedder = make_embedder(cfg.embedder)
+    llm = make_llm(cfg.llm)
+
+    with session_scope() as session:
+        result = rag_ask(
+            session, embedder, llm, question,
+            model=cfg.llm.model_reason, k=k, use_profile=not no_profile,
+        )
+
+    if result is None:
+        typer.secho("Nada no histórico ainda. Rode `agent run` primeiro.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=0)
+
+    typer.secho(f'\nP: {question}', bold=True)
+    typer.secho(f"\n{result.answer}\n", fg=typer.colors.GREEN)
+    typer.secho("Fontes usadas:", dim=True)
+    for s in result.sources:
+        aid = s.arxiv_id or "—"
+        typer.echo(f"    [{aid}] {s.title}  (score={s.score:.3f})")
 
 
 @app.command()
