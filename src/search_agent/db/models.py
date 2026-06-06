@@ -157,3 +157,26 @@ class UserProfile(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ── E3: substrate relacional (arestas entre papers) ─────────────────────────
+
+
+class Edge(Base):
+    """Relação entre dois papers (§3.2). `kind`: same_author | same_subarea | cites.
+    Não-direcionadas guardadas canonicamente (src_id < dst_id); `cites` é direcionada.
+    `weight` carrega a força (p/ same_subarea, a similaridade de embedding)."""
+
+    __tablename__ = "edges"
+
+    src_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+    )
+    dst_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+    )
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

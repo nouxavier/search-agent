@@ -23,6 +23,7 @@ from .embeddings import make_embedder
 from .llm import make_llm
 from .logging_setup import get_logger, setup_logging
 from .memory.consolidate import consolidate
+from .memory.graph import relational_neighbors
 from .memory.read_path import recall, rerank_by_profile
 from .memory.reflect import reflect
 from .memory.write_path import (
@@ -72,9 +73,12 @@ def run(
         for rank, pid in enumerate(digest_ids, start=1):
             link_to_run(session, run_row.id, pid, rank=rank)
 
+        # GRAPH EXPAND (E3): pra cada paper do digest, uma ponte a algo já visto antes.
+        notes = relational_neighbors(session, digest_ids, seen)
+
         total = count_papers(session)
         digest = [(pid, ingested[pid]) for pid in digest_ids]
-        _print_digest(area, digest, ingested_count=len(ingested), total=total)
+        _print_digest(area, digest, ingested_count=len(ingested), total=total, notes=notes)
         typer.secho(f"  (run #{run_row.id} · use `agent reflect {run_row.id}` para refletir)", dim=True)
         log.info("run.done", extra={"run_id": run_row.id, "ingested": len(ingested), "digest": len(digest)})
 
@@ -197,7 +201,8 @@ def _highlighted_ids(session, run_id: int) -> set[int]:
     return {row[0] for row in rows}
 
 
-def _print_digest(area: str, digest, *, ingested_count: int, total: int) -> None:
+def _print_digest(area: str, digest, *, ingested_count: int, total: int, notes=None) -> None:
+    notes = notes or {}
     if not digest:
         typer.secho(
             f'\nNada novo em "{area}" desde o último run ({ingested_count} candidatos, todos já vistos).',
@@ -208,6 +213,12 @@ def _print_digest(area: str, digest, *, ingested_count: int, total: int) -> None
             arxiv_id = raw.source_ids.get("arxiv_id", "—")
             typer.secho(f"\n[{rank}] {raw.title}", fg=typer.colors.CYAN, bold=True)
             typer.echo(f"    id={pid}  arxiv_id={arxiv_id}  year={raw.year}  {raw.first_author}")
+            rel = notes.get(pid)
+            if rel:  # E3: ponte relacional pra algo já visto antes
+                typer.secho(
+                    f'    ↳ conecta-se a "{rel.neighbor_title[:60]}" (id={rel.neighbor_id}) via {rel.kind}',
+                    fg=typer.colors.MAGENTA,
+                )
     typer.secho(
         f"\n✓ digest: {len(digest)} novos de {ingested_count} candidatos · store agora tem {total} papers.",
         fg=typer.colors.GREEN,
