@@ -15,6 +15,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",
     "anthropic>=0.40",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

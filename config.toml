@@ -20,7 +20,10 @@ dim = 1024
 ollama_host = "http://localhost:11434"
 
 [llm]
-provider = "anthropic"
+# claude_cli: usa o login da assinatura Pro/Max via `claude -p` (sem API key).
+# anthropic:  usa o SDK da API (precisa de ANTHROPIC_API_KEY, cobrança pay-as-you-go).
+# fake:       resposta fixa, pra rodar offline/testes.
+provider = "claude_cli"
 model_fast = "claude-haiku-4-5"     # tagging/filtragem de alto volume
 model_reason = "claude-sonnet-4-6"  # reflexão/consolidação (E2+)
 

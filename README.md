@@ -9,11 +9,14 @@ lembra o que já viu entre execuções. Veja [docs/](docs/) para o plano complet
 [search-project.md](docs/search-project.md) (conceito), [plano-implementacao.md](docs/plano-implementacao.md)
 (engenharia) e [rfc-memory-layer.md](docs/rfc-memory-layer.md) (spec técnica).
 
-**Fase atual: E1** — camada episodic (Pattern B). O `agent run` **persiste** os
-papers com dedup canônica (o mesmo paper de fontes diferentes funde num registro)
-e o digest **não repete** o que runs anteriores já mostraram; o `agent query`
-responde *"o que já vi sobre X?"* por similaridade. Requer Postgres + a migração
-aplicada (veja Setup).
+**Fase atual: E2** — reflexão e consolidação (episodic → semantic). Sobre a E1
+(dedup canônica + write/read path), o agente agora **reflete** sobre cada run —
+com *grounding* obrigatório em arxiv_ids concretos — e abstrai um `user_profile`
+de preferências que **evolui** (confidence + expiração) e **re-ranqueia** o
+digest/consulta. `agent feedback` marca um paper como relevante, sinal que move o
+perfil. Requer Postgres + migração aplicada (veja Setup); `agent reflect` usa o
+Claude — por padrão pela sua **assinatura Pro/Max** (sem API key), ou pela API paga
+(veja [Como o agente fala com o Claude](#como-o-agente-fala-com-o-claude)).
 
 ## O que o Ollama faz aqui
 
@@ -36,7 +39,7 @@ outro embedder (ex.: Voyage AI) atrás da interface `Embedder` sem mexer no pipe
 | **uv** | deps + venv | `brew install uv` |
 | **Ollama** | embeddings (bge-m3, local/offline) | `brew install --cask ollama-app` — **veja a nota abaixo** |
 | **Docker** | Postgres + pgvector (usado a partir da E1) | Docker Desktop |
-| Anthropic API key | só pro `agent smoke` / fases E2+ | `export ANTHROPIC_API_KEY=sk-ant-...` |
+| **Claude** (LLM) | `smoke` / `reflect` (E2+) | assinatura **Pro/Max** via `claude` (padrão, sem key) **ou** API key — [detalhes](#como-o-agente-fala-com-o-claude) |
 
 > ### ⚠️ Ollama: use o **cask**, não a formula
 > A formula do Homebrew (`brew install ollama`) instala mas o runtime vem
@@ -79,6 +82,44 @@ ollama serve &
 curl -s localhost:11434/api/version          # → {"version":"..."}
 ```
 
+### Os comandos numa olhada
+
+Pensa no agente como um **assistente de pesquisa** com memória. Cada comando é uma
+ordem que você dá pra ele:
+
+| Comando | Em uma frase | O que faz com a memória |
+|---|---|---|
+| `agent run` | *"Vai ao arXiv, traz papers novos e arquiva."* | **escreve** — entra coisa nova |
+| `agent query` | *"Me lembra o que já vimos sobre X."* | **lê** — só consulta o que já está guardado |
+| `agent feedback` | *"Esse paper aqui me foi útil, anota."* | **ensina** — marca um paper como relevante |
+| `agent reflect` | *"Pensa no último run e anota meus interesses."* | **ensina** — o Claude resume teus gostos |
+| `agent profile` | *"Me diz o que você entendeu que eu gosto."* | **mostra** — lista as preferências acumuladas |
+| `agent smoke` | *"Teste de microfone: o Claude tá me ouvindo?"* | **nada** — só checa a conexão com o LLM |
+
+O fio condutor: **`run` põe coisa na memória, `query` tira. `feedback` e `reflect`
+moldam o *gosto* do agente (o `user_profile`), e esse gosto re-ordena os próximos
+`run`/`query` — papers alinhados ao perfil sobem.** `profile` é só a janela pra ver
+esse gosto; `smoke` é um teste técnico que não mexe em nada.
+
+Ordem típica de uma sessão. O passo 1 **imprime os ids** que os passos 2 e 3 usam —
+cada paper sai com um `id=` e o run inteiro com um `run #`:
+
+```text
+[3] Beyond Vector Similarity: A Structural Analysis of Graph-Augmented Retrieval...
+    id=27  arxiv_id=2606.06003  year=2026  Grama Chethan          ← esse 27 é o <paper_id>
+...
+✓ digest: 5 novos de 5 candidatos · store agora tem 11 papers.
+  (run #5 · use `agent reflect 5` para refletir)                 ← esse 5 é o <run_id>
+```
+
+```bash
+uv run agent run -a "retrieval augmented generation" -n 5   # 1. traz e arquiva → imprime os ids (veja acima)
+uv run agent feedback <paper_id>                            # 2. (opcional) "gostei desse" — um id do passo 1, ex.: 27
+uv run agent reflect <run_id>                               # 3. reflete sobre aquele run (o run #) → atualiza o perfil
+uv run agent profile                                        # 4. confere o que ele aprendeu
+uv run agent query "graph retrieval"                        # 5. consulta — já reordenado pelo perfil
+```
+
 ### Pipeline principal — `agent run`
 
 Busca no arXiv, **grava** com dedup canônica e mostra só o que é novo (papers já
@@ -101,7 +142,29 @@ Read path: "o que já vi sobre X?" por similaridade de embedding.
 uv run agent query "trustworthy memory search for agents"
 uv run agent query "retrieval augmented generation" -k 5
 uv run agent query "long-horizon agents" --area "memory"   # filtro por título
+uv run agent query "agent memory" --no-profile             # só similaridade, sem re-rank
 ```
+
+A saída traz `sim≈` (similaridade à consulta), `perfil≈` (afinidade ao
+`user_profile`) e `score` (mistura usada na ordenação).
+
+### Reflexão e perfil — `reflect` / `feedback` / `profile` (E2)
+
+```bash
+# 1. marca um paper do digest como relevante (sinal que move o perfil)
+uv run agent feedback <paper_id>           # paper_id aparece no `run`/`query`
+
+# 2. reflete sobre um run → gera nota grounded e atualiza o user_profile
+uv run agent reflect <run_id>               # usa o Claude (run_id é impresso no `run`)
+                                            # provider em config.toml — Max por padrão, sem key
+
+# 3. inspeciona as preferências vigentes
+uv run agent profile
+```
+
+O perfil passa a influenciar o ranking do próximo `run`/`query`. Cada statement
+expira (anti *self-reinforcing error*) e ganha confidence quando reaparece ou
+recebe feedback.
 
 ### Sem Ollama (offline) — embedder fake
 
@@ -111,12 +174,37 @@ Vetor determinístico, não-semântico — pro pipeline rodar sem o modelo:
 SEARCH_AGENT__EMBEDDER__PROVIDER=fake uv run agent run -n 3
 ```
 
-### Smoke test do LLM (Claude) — precisa de API key
+### Como o agente fala com o Claude
+
+O `reflect` e o `smoke` precisam do Claude. Tem dois jeitos, escolhidos pelo
+`provider` em `[llm]` no [config.toml](config.toml):
+
+| `provider` | Como cobra | Precisa de quê |
+|---|---|---|
+| `claude_cli` *(padrão)* | sua **assinatura Pro/Max** (sem API key) | estar logado no Claude Code (`claude`) |
+| `anthropic` | crédito **pay-as-you-go** da API | `ANTHROPIC_API_KEY` no `.env` |
+| `fake` | — | nada (resposta fixa, pra testes) |
+
+O modo padrão (`claude_cli`) roteia pelo binário `claude -p`, então usa o login da
+sua assinatura — **não gasta API key**. Pré-requisito: ter o Claude Code instalado e
+logado.
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-uv run agent smoke
+# teste rápido de que o LLM responde (usa o provider do config.toml):
+uv run agent smoke                     # → LLM (claude-haiku-4-5): Ok, search-agent.
 ```
+
+**Usar a API paga em vez da assinatura** — copie `.env.example` para `.env`, ponha a
+chave, e troque o provider:
+
+```bash
+cp .env.example .env                   # edite e cole ANTHROPIC_API_KEY=sk-ant-...
+SEARCH_AGENT__LLM__PROVIDER=anthropic uv run agent smoke   # pontual
+# ou fixe provider = "anthropic" no config.toml
+```
+
+> O `.env` é carregado automaticamente e fica fora do git. No modo `claude_cli` a
+> `ANTHROPIC_API_KEY` é ignorada de propósito (pra cobrança ir pra assinatura).
 
 ### Testes
 
@@ -156,21 +244,24 @@ uv run agent run
 
 ```
 src/search_agent/
-├── cli.py            # Typer: agent run / query / smoke
+├── cli.py            # Typer: run / query / reflect / feedback / profile / smoke
 ├── config.py         # pydantic-settings (lê config.toml + env)
 ├── sources/          # adapters de fonte → RawPaper canônico (base.py + arxiv.py)
 ├── db/
-│   ├── models.py     # schema ORM (papers, external_ids, sources, runs, run_papers)
+│   ├── models.py     # schema ORM (papers, external_ids, sources, runs, run_papers,
+│   │                 #   reflections, user_profile)
 │   ├── session.py    # engine + session_scope
 │   └── queries.py    # SQL cru de retrieval (vetor kNN + metadata)
 ├── memory/
 │   ├── identity.py   # chave canônica (DOI → hash) — dedup cross-source
 │   ├── write_path.py # filter → dedup/merge → tag → persist → link run (§7.1)
-│   └── read_path.py  # recall: "o que já vi sobre X?" (§7.2)
+│   ├── read_path.py  # recall + re-rank por perfil (§7.2 / E2)
+│   ├── reflect.py    # reflexão grounded pós-run (§4.3)
+│   └── consolidate.py# reflexões → user_profile + afinidade (§9.1)
 ├── embeddings.py     # Embedder: OllamaEmbedder (bge-m3) | FakeEmbedder
-├── llm.py            # LLMClient: AnthropicClient (usado a partir da E2)
+├── llm.py            # LLMClient: AnthropicClient | ClaudeCliClient (Max) | FakeLLM
 └── logging_setup.py  # logging JSON
-alembic/              # migrações versionadas (0001_e1_episodic)
+alembic/              # migrações versionadas (0001_e1_episodic, 0002_e2_semantic)
 docker-compose.yml    # Postgres 16 + pgvector
 config.toml           # defaults versionados
 ```
@@ -183,5 +274,5 @@ config.toml           # defaults versionados
 | `Could not connect ... 11434` | Ollama não está rodando — `ollama serve &` ou abra o app |
 | `301 Moved Permanently` (arXiv) | já tratado (https + follow_redirects); se aparecer, atualize o repo |
 | `Cannot connect to the Docker daemon` | Docker Desktop não está aberto |
-| `agent smoke` falha com auth | falta `ANTHROPIC_API_KEY` no ambiente |
-```
+| `agent smoke` falha com `invalid x-api-key` | provider `anthropic` sem `ANTHROPIC_API_KEY` válida — use `claude_cli` (Max) ou ponha a key no `.env` |
+| `agent smoke` (claude_cli) falha | binário `claude` não encontrado ou não logado — instale o Claude Code e rode `claude` uma vez |
