@@ -1,0 +1,29 @@
+# Defaults do agente — versionados (resolve o buraco "defaults moram no prompt" da fase-0).
+# Lidos por src/search_agent/config.py (pydantic-settings). Sobrescrevíveis por env
+# (prefixo SEARCH_AGENT__, ex.: SEARCH_AGENT__EMBEDDER__PROVIDER=fake) ou flags da CLI.
+
+[agent]
+language = "pt"          # idioma do digest
+default_area = "LLM Agents"
+papers_per_run = 10      # N papers que um run busca/cura
+min_year = 2023          # filtro de write path (descarta sinal antigo) — usado a partir da E1
+
+[source]
+name = "arxiv"
+# Categorias arXiv usadas para montar a query quando a área não mapeia 1:1.
+categories = ["cs.AI", "cs.CL", "cs.LG"]
+
+[embedder]
+provider = "ollama"      # "ollama" | "fake"
+model = "bge-m3"
+dim = 1024
+ollama_host = "http://localhost:11434"
+
+[llm]
+provider = "anthropic"
+model_fast = "claude-haiku-4-5"     # tagging/filtragem de alto volume
+model_reason = "claude-sonnet-4-6"  # reflexão/consolidação (E2+)
+
+[db]
+# Usado a partir da E1. Na E0 o compose sobe mas o pipeline não grava.
+url = "postgresql+psycopg://search:search@localhost:5432/search_agent"
