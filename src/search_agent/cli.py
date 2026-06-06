@@ -1,20 +1,30 @@
 """CLI (Typer).
 
-E0: `run` imprimia em memória. E1: `run` agora **persiste** (write path com dedup)
-e o digest **não repete** papers já surfaceados em runs anteriores; `query`
-responde "o que já vi sobre X?" via read path. `smoke` testa o LLM.
+E1: `run` persiste (write path, dedup) e o digest não repete runs anteriores;
+`query` é o read path. E2: `reflect` gera nota grounded pós-run, `feedback` marca
+um paper como relevante (sinal que move o perfil), `consolidate`/`reflect`
+atualizam o `user_profile`, e `run`/`query` re-ranqueiam pelo perfil. `profile`
+lista as preferências vigentes. `smoke` testa o LLM.
 """
 
 from __future__ import annotations
 
 import typer
+from dotenv import load_dotenv
+from sqlalchemy import select, text
 
-from .config import get_settings
+from .config import REPO_ROOT, get_settings
+
+# Carrega .env (ex.: ANTHROPIC_API_KEY) para os.environ — é de lá que o SDK lê.
+load_dotenv(REPO_ROOT / ".env")
+from .db.models import UserProfile
 from .db.session import session_scope
 from .embeddings import make_embedder
 from .llm import make_llm
 from .logging_setup import get_logger, setup_logging
-from .memory.read_path import recall
+from .memory.consolidate import consolidate
+from .memory.read_path import recall, rerank_by_profile
+from .memory.reflect import reflect
 from .memory.write_path import (
     count_papers,
     create_run,
@@ -33,7 +43,7 @@ def run(
     area: str = typer.Option(None, "--area", "-a", help="Área de pesquisa (default do config)."),
     limit: int = typer.Option(None, "--limit", "-n", help="Quantos papers buscar."),
 ) -> None:
-    """E1: arXiv → write path (dedup/persist) → digest sem repetir runs anteriores."""
+    """arXiv → write path (dedup/persist) → digest sem repetir, re-ranqueado pelo perfil (E2)."""
     setup_logging()
     cfg = get_settings()
     area = area or cfg.agent.default_area
@@ -41,67 +51,127 @@ def run(
 
     source = ArxivSource(categories=cfg.source.categories, max_results=limit)
     embedder = make_embedder(cfg.embedder)
-    params = {
-        "area": area,
-        "limit": limit,
-        "embedder": cfg.embedder.provider,
-        "embed_model": cfg.embedder.model,
-        "min_year": cfg.agent.min_year,
-    }
-
+    params = {"area": area, "limit": limit, "embedder": cfg.embedder.provider, "min_year": cfg.agent.min_year}
     log.info("run.start", extra=params)
 
     with session_scope() as session:
         run_row = create_run(session, area, params)
         candidates = list(source.fetch(area))
 
-        # WRITE PATH: grava todos os candidatos (dedup por identidade canônica).
-        ingested: dict[int, object] = {}  # paper_id → RawPaper (1º visto vence)
+        ingested: dict[int, object] = {}
         for raw in candidates:
             pid = ingest(session, embedder, raw, min_year=cfg.agent.min_year)
             if pid is not None and pid not in ingested:
                 ingested[pid] = raw
 
-        # DIGEST: só o que nenhum run anterior surfaceou (não-repetição, G2).
         seen = previously_seen_ids(session, exclude_run_id=run_row.id)
-        digest = [(pid, raw) for pid, raw in ingested.items() if pid not in seen]
+        digest_ids = [pid for pid in ingested if pid not in seen]
+        # RANK BY PROFILE (E2): o perfil semântico reordena o digest.
+        digest_ids = rerank_by_profile(session, embedder, digest_ids)
 
-        for rank, (pid, raw) in enumerate(digest, start=1):
+        for rank, pid in enumerate(digest_ids, start=1):
             link_to_run(session, run_row.id, pid, rank=rank)
 
         total = count_papers(session)
-        run_id = run_row.id
-
+        digest = [(pid, ingested[pid]) for pid in digest_ids]
         _print_digest(area, digest, ingested_count=len(ingested), total=total)
-        log.info(
-            "run.done",
-            extra={"run_id": run_id, "ingested": len(ingested), "digest": len(digest), "store_total": total},
-        )
+        typer.secho(f"  (run #{run_row.id} · use `agent reflect {run_row.id}` para refletir)", dim=True)
+        log.info("run.done", extra={"run_id": run_row.id, "ingested": len(ingested), "digest": len(digest)})
 
 
 @app.command()
 def query(
-    text: str = typer.Argument(..., help="O que você quer recuperar do histórico."),
-    k: int = typer.Option(10, "--k", "-k", help="Quantos resultados."),
+    text_: str = typer.Argument(..., metavar="TEXT", help="O que recuperar do histórico."),
+    k: int = typer.Option(10, "--k", "-k"),
     area: str = typer.Option(None, "--area", "-a", help="Filtro opcional por área (no título)."),
+    no_profile: bool = typer.Option(False, "--no-profile", help="Ignora o perfil (só similaridade)."),
 ) -> None:
-    """Read path: 'o que já vi sobre X?' — busca por similaridade no histórico."""
+    """Read path: 'o que já vi sobre X?' — kNN reordenado pelo perfil (E2)."""
     setup_logging()
     cfg = get_settings()
     embedder = make_embedder(cfg.embedder)
 
     with session_scope() as session:
-        hits = recall(session, embedder, text, k=k, area=area)
+        ranked = recall(session, embedder, text_, k=k, area=area, use_profile=not no_profile)
 
-    if not hits:
+    if not ranked:
         typer.secho("Nada no histórico ainda. Rode `agent run` primeiro.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=0)
 
-    typer.secho(f'\nMais próximos de "{text}":', bold=True)
-    for i, h in enumerate(hits, start=1):
-        sim = 1.0 - h.distance  # cosseno: 1 = idêntico
-        typer.secho(f"\n[{i}] {h.title}", fg=typer.colors.CYAN, bold=True)
-        typer.echo(f"    {h.first_author or '—'}  ({h.year or '—'})  sim≈{sim:.3f}")
+    typer.secho(f'\nMais próximos de "{text_}"' + ("" if no_profile else " (re-ranqueado pelo perfil):"), bold=True)
+    for i, r in enumerate(ranked, start=1):
+        typer.secho(f"\n[{i}] {r.hit.title}", fg=typer.colors.CYAN, bold=True)
+        typer.echo(
+            f"    {r.hit.first_author or '—'} ({r.hit.year or '—'})  "
+            f"sim≈{r.base_sim:.3f}  perfil≈{r.profile_affinity:.3f}  score={r.score:.3f}"
+        )
+
+
+@app.command()
+def reflect_(
+    run_id: int = typer.Argument(..., metavar="RUN_ID", help="Run a refletir."),
+) -> None:
+    """Reflexão grounded pós-run → atualiza o user_profile (E2)."""
+    setup_logging()
+    cfg = get_settings()
+    llm = make_llm(cfg.llm)
+
+    with session_scope() as session:
+        proposed = reflect(session, llm, run_id, model=cfg.llm.model_reason)
+        if not proposed:
+            typer.secho("Nenhuma reflexão grounded (sem evidência suficiente).", fg=typer.colors.YELLOW)
+            raise typer.Exit(code=0)
+        highlighted = _highlighted_ids(session, run_id)
+        consolidate(session, proposed, highlighted_ids=highlighted)
+        typer.secho(f"✓ {len(proposed)} statements consolidados no perfil:", fg=typer.colors.GREEN)
+        for ps in proposed:
+            typer.echo(f"  · {ps.statement}  (evidência: {ps.evidence_ids})")
+
+
+# `reflect` é palavra reservada do módulo importado; registra o comando com o nome certo.
+app.command(name="reflect")(reflect_)
+
+
+@app.command()
+def feedback(
+    paper_id: int = typer.Argument(..., help="paper_id (aparece no digest)."),
+    run_id: int = typer.Option(None, "--run", "-r", help="Run onde marcar (default: o mais recente que surfaceou o paper)."),
+) -> None:
+    """Marca um paper como relevante — sinal que move o perfil na consolidação (E2)."""
+    setup_logging()
+    with session_scope() as session:
+        if run_id is None:
+            run_id = session.execute(
+                text("SELECT run_id FROM run_papers WHERE paper_id=:p ORDER BY run_id DESC LIMIT 1"),
+                {"p": paper_id},
+            ).scalar()
+        if run_id is None:
+            typer.secho("Esse paper não foi surfaceado em nenhum run.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        n = session.execute(
+            text("UPDATE run_papers SET was_highlight=true WHERE run_id=:r AND paper_id=:p"),
+            {"r": run_id, "p": paper_id},
+        ).rowcount
+        if not n:
+            typer.secho("Par (run, paper) não encontrado.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+    typer.secho(f"✓ paper {paper_id} marcado como highlight no run {run_id}.", fg=typer.colors.GREEN)
+
+
+@app.command()
+def profile() -> None:
+    """Lista as preferências vigentes (user_profile), por confidence."""
+    setup_logging()
+    with session_scope() as session:
+        rows = session.execute(select(UserProfile).order_by(UserProfile.confidence.desc())).scalars().all()
+    if not rows:
+        typer.secho("Perfil vazio. Rode `agent reflect <run_id>`.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=0)
+    typer.secho("\nuser_profile:", bold=True)
+    for r in rows:
+        exp = r.expires_at.date().isoformat() if r.expires_at else "—"
+        typer.secho(f"\n· {r.statement}", fg=typer.colors.CYAN)
+        typer.echo(f"    confidence={r.confidence:.2f}  expira={exp}  evidência={r.evidence_ids}")
 
 
 @app.command()
@@ -119,11 +189,18 @@ def smoke() -> None:
     typer.secho(f"LLM ({cfg.llm.model_fast}): {out.strip()}", fg=typer.colors.GREEN)
 
 
+def _highlighted_ids(session, run_id: int) -> set[int]:
+    rows = session.execute(
+        text("SELECT paper_id FROM run_papers WHERE run_id=:r AND was_highlight=true"),
+        {"r": run_id},
+    )
+    return {row[0] for row in rows}
+
+
 def _print_digest(area: str, digest, *, ingested_count: int, total: int) -> None:
     if not digest:
         typer.secho(
-            f'\nNada novo em "{area}" desde o último run '
-            f"({ingested_count} candidatos, todos já vistos).",
+            f'\nNada novo em "{area}" desde o último run ({ingested_count} candidatos, todos já vistos).',
             fg=typer.colors.YELLOW,
         )
     else:

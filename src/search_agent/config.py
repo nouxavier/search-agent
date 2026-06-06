@@ -7,12 +7,16 @@ como separador aninhado (ex.: SEARCH_AGENT__EMBEDDER__PROVIDER=fake).
 
 from __future__ import annotations
 
-import tomllib
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
 
 # Raiz do repo = dois níveis acima deste arquivo (src/search_agent/config.py).
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -39,13 +43,19 @@ class EmbedderCfg(BaseModel):
 
 
 class LLMCfg(BaseModel):
-    provider: str = "anthropic"
+    provider: str = "anthropic"   # "anthropic" (API key) | "claude_cli" (assinatura Max) | "fake"
     model_fast: str = "claude-haiku-4-5"
     model_reason: str = "claude-sonnet-4-6"
+    cli_bin: str = "claude"       # binário usado pelo provider claude_cli
+    cli_timeout_s: int = 120      # timeout do subprocess `claude -p`
 
 
 class DBCfg(BaseModel):
     url: str = "postgresql+psycopg://search:search@localhost:5432/search_agent"
+
+
+# Caminho do toml lido pela source — get_settings o ajusta antes de instanciar.
+_TOML_PATH: Path = CONFIG_PATH
 
 
 class Settings(BaseSettings):
@@ -61,12 +71,21 @@ class Settings(BaseSettings):
     llm: LLMCfg = LLMCfg()
     db: DBCfg = DBCfg()
 
-
-def _load_toml(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    with path.open("rb") as fh:
-        return tomllib.load(fh)
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Precedência (primeiro ganha): init < env < dotenv < toml < defaults.
+        # toml DEPOIS do env => env (SEARCH_AGENT__...) sobrepõe o config.toml,
+        # como o docstring do módulo promete. Antes, o toml vinha como init kwargs
+        # e ganhava do env — bug que silenciava os overrides do README.
+        toml = TomlConfigSettingsSource(settings_cls, toml_file=_TOML_PATH)
+        return (init_settings, env_settings, dotenv_settings, toml, file_secret_settings)
 
 
 @lru_cache
@@ -75,6 +94,6 @@ def get_settings(config_path: Path | None = None) -> Settings:
 
     Precedência: defaults dos modelos < config.toml < env (SEARCH_AGENT__...).
     """
-    data = _load_toml(config_path or CONFIG_PATH)
-    # Env tem a última palavra: BaseSettings já lê env; passamos o toml como base.
-    return Settings(**data)
+    global _TOML_PATH
+    _TOML_PATH = config_path or CONFIG_PATH
+    return Settings()

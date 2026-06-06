@@ -15,9 +15,11 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    ARRAY,
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     SmallInteger,
@@ -104,7 +106,8 @@ class Run(Base):
 
 class RunPaper(Base):
     """Quais papers cada run *surfaceou* (digest). É o registro de 'já visto' que
-    faz dois runs seguidos não repetirem o mesmo paper."""
+    faz dois runs seguidos não repetirem o mesmo paper. `was_highlight` é o sinal
+    de feedback da E2 (paper marcado como relevante) que alimenta a consolidação."""
 
     __tablename__ = "run_papers"
 
@@ -116,3 +119,41 @@ class RunPaper(Base):
     )
     rank: Mapped[int | None] = mapped_column(Integer)
     was_highlight: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+# ── E2: semantic (reflexão → consolidação) ──────────────────────────────────
+
+
+class Reflection(Base):
+    """Nota pós-run gerada pelo LLM, *grounded* em paper_ids concretos (§4.3).
+    Sem evidência não vira reflexão — `grounded_ids` nunca é vazio."""
+
+    __tablename__ = "reflections"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
+    )
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    grounded_ids: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class UserProfile(Base):
+    """Memória semântica: preferências que evoluem e re-ranqueiam o digest.
+    `evidence_ids` é grounding obrigatório; `expires_at` evita que uma reflexão
+    errada cristalize (anti self-reinforcing error, §4.3)."""
+
+    __tablename__ = "user_profile"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    statement_key: Mapped[str] = mapped_column(Text, unique=True, nullable=False)  # texto normalizado p/ dedup
+    evidence_ids: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

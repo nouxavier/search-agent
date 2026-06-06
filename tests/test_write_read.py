@@ -103,13 +103,13 @@ def test_recall_finds_seen_paper(session):
     ingest(session, EMB, raw, min_year=2000)
     session.flush()
     # recall acha o paper certo no topo ("o que já vi sobre X?")
-    hits = recall(session, EMB, "retrieval augmented generation for agents", k=5)
-    assert hits
-    assert hits[0].title == "Retrieval augmented generation for agents"
+    ranked = recall(session, EMB, "retrieval augmented generation for agents", k=5)
+    assert ranked
+    assert ranked[0].hit.title == "Retrieval augmented generation for agents"
     # FakeEmbedder é determinístico: consultar com o MESMO texto embedado (título+
-    # abstract) → distância ~0. Prova que o vetor gravado é o que a busca recupera.
-    hits_exact = recall(session, EMB, raw.embed_text, k=5)
-    assert hits_exact[0].distance < 1e-6
+    # abstract) → similaridade ~1. Prova que o vetor gravado é o que a busca recupera.
+    ranked_exact = recall(session, EMB, raw.embed_text, k=5)
+    assert ranked_exact[0].base_sim > 1 - 1e-6
 
 
 def test_exclude_seen_in_search(session):
