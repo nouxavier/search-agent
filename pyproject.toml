@@ -39,4 +39,5 @@ addopts = "-q"
 [dependency-groups]
 dev = [
     "pytest>=8.2",
+    "testcontainers>=4.0",
 ]

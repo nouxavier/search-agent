@@ -9,8 +9,11 @@ lembra o que já viu entre execuções. Veja [docs/](docs/) para o plano complet
 [search-project.md](docs/search-project.md) (conceito), [plano-implementacao.md](docs/plano-implementacao.md)
 (engenharia) e [rfc-memory-layer.md](docs/rfc-memory-layer.md) (spec técnica).
 
-**Fase atual: E0** — pipeline ponta a ponta em memória (arXiv → normaliza → embed
-→ imprime). Ainda **não persiste** nada; o Postgres sobe mas só passa a gravar na E1.
+**Fase atual: E1** — camada episodic (Pattern B). O `agent run` **persiste** os
+papers com dedup canônica (o mesmo paper de fontes diferentes funde num registro)
+e o digest **não repete** o que runs anteriores já mostraram; o `agent query`
+responde *"o que já vi sobre X?"* por similaridade. Requer Postgres + a migração
+aplicada (veja Setup).
 
 ## O que o Ollama faz aqui
 
@@ -56,6 +59,10 @@ uv sync
 
 # 2. baixar o modelo de embedding (~1.2 GB, uma vez)
 ollama pull bge-m3
+
+# 3. subir o Postgres e aplicar o schema (E1 em diante)
+docker compose up -d
+uv run alembic upgrade head
 ```
 
 ---
@@ -74,14 +81,27 @@ curl -s localhost:11434/api/version          # → {"version":"..."}
 
 ### Pipeline principal — `agent run`
 
+Busca no arXiv, **grava** com dedup canônica e mostra só o que é novo (papers já
+surfaceados em runs anteriores não voltam):
+
 ```bash
-uv run agent run                                    # área default (config.toml), 10 papers
+uv run agent run                                    # área default (config.toml)
 uv run agent run --area "memory for LLM agents" --limit 10
 uv run agent run -a "retrieval augmented generation" -n 5
 ```
 
-Saída esperada: um bloco por paper (título, `arxiv_id`, ano, autor, `embedding:
-dim=1024`), terminando em `✓ N papers normalizados com embedding (dim=1024)`.
+Saída: um bloco por paper novo, terminando em `✓ digest: N novos de M candidatos ·
+store agora tem T papers`. Rodar de novo na mesma área → `Nada novo desde o último run`.
+
+### Recuperar do histórico — `agent query`
+
+Read path: "o que já vi sobre X?" por similaridade de embedding.
+
+```bash
+uv run agent query "trustworthy memory search for agents"
+uv run agent query "retrieval augmented generation" -k 5
+uv run agent query "long-horizon agents" --area "memory"   # filtro por título
+```
 
 ### Sem Ollama (offline) — embedder fake
 
@@ -136,13 +156,21 @@ uv run agent run
 
 ```
 src/search_agent/
-├── cli.py            # Typer: agent run / smoke
+├── cli.py            # Typer: agent run / query / smoke
 ├── config.py         # pydantic-settings (lê config.toml + env)
 ├── sources/          # adapters de fonte → RawPaper canônico (base.py + arxiv.py)
+├── db/
+│   ├── models.py     # schema ORM (papers, external_ids, sources, runs, run_papers)
+│   ├── session.py    # engine + session_scope
+│   └── queries.py    # SQL cru de retrieval (vetor kNN + metadata)
+├── memory/
+│   ├── identity.py   # chave canônica (DOI → hash) — dedup cross-source
+│   ├── write_path.py # filter → dedup/merge → tag → persist → link run (§7.1)
+│   └── read_path.py  # recall: "o que já vi sobre X?" (§7.2)
 ├── embeddings.py     # Embedder: OllamaEmbedder (bge-m3) | FakeEmbedder
 ├── llm.py            # LLMClient: AnthropicClient (usado a partir da E2)
 └── logging_setup.py  # logging JSON
-alembic/              # migrações versionadas (schema entra na E1)
+alembic/              # migrações versionadas (0001_e1_episodic)
 docker-compose.yml    # Postgres 16 + pgvector
 config.toml           # defaults versionados
 ```
