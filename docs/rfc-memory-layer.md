@@ -119,7 +119,7 @@ CREATE TABLE papers (
     abstract     TEXT,
     first_author TEXT,
     year         SMALLINT,
-    embedding    VECTOR(384),                   -- MiniLM-L6-v2; trocável
+    embedding    VECTOR(1024),                  -- BGE-M3 via Ollama; trocável
     schema_ver   SMALLINT NOT NULL DEFAULT 1,   -- versiona o registro (§6.6)
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -227,8 +227,12 @@ class Source(Protocol):
 
 # embeddings.py
 class Embedder(Protocol):
-    dim: int
+    dim: int                                     # 1024 para BGE-M3
     def embed(self, texts: list[str]) -> list[list[float]]: ...
+    # impl MVP: OllamaEmbedder → POST {OLLAMA_HOST}/api/embed
+    #           {"model": "bge-m3", "input": texts} → "embeddings".
+    #           Pré-requisito: `ollama pull bge-m3`. Trocável por Voyage sem
+    #           tocar o pipeline (muda só dim + a coluna VECTOR).
 
 # llm.py
 class LLMClient(Protocol):
@@ -380,7 +384,7 @@ Detalhado em [plano-implementacao.md](plano-implementacao.md). Resumo:
 |---------|---------|-------------|-------------|
 | Vector store | **pgvector** | Pinecone/Qdrant/Chroma dedicado | Retrieval é vetor+metadata+relação no mesmo query; volume (poucos milhares) não justifica sincronizar dois bancos nem transações distribuídas. pgvector já tem HNSW. |
 | Acesso a dados | **SQLAlchemy + SQL cru no retrieval** | ORM 100% / SQL 100% cru | ORM puro esconde o read path (que queremos *internalizar*); SQL puro perde migrações disciplinadas. Híbrido: ORM no CRUD, SQL explícito onde transparência importa. |
-| Embeddings | **MiniLM local** (dev) | Voyage/OpenAI desde já | Grátis, offline, determinístico p/ testes. Interface `Embedder` permite trocar sem tocar o pipeline. |
+| Embeddings | **BGE-M3 via Ollama** (1024d) | MiniLM local / Voyage/OpenAI desde já | Multilíngue, contexto 8k (abstract inteiro), local/grátis/offline, sem API key. Mais forte que MiniLM ao mesmo custo operacional. Interface `Embedder` permite trocar por Voyage sem tocar o pipeline. |
 | Identidade | **canônica DOI→hash** | dedup por `arxiv_id` | `arxiv_id` quebra no multi-fonte; canônica é pré-requisito do schema source-agnostic. |
 | Control policy | **heurístico** | learned/RL desde já | Alto custo de treino, risco de learned forgetting, baixa interpretabilidade — sem justificativa antes de E4 (§4.5). |
 | Store de config | **config.toml versionado** | manter no prompt | Defaults no prompt foram diagnosticados como buraco na fase-0; viram dado auditável. |
