@@ -25,6 +25,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -180,3 +181,28 @@ class Edge(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+# ── E4: avaliação (feedback explícito) ──────────────────────────────────────
+
+
+class Feedback(Base):
+    """Sinal de utilidade por paper (§5): up | down | star. Base do metric stack —
+    up/star = surfaceado e útil; down = recuperado mas inútil. `run_id` sobrevive
+    ao run (SET NULL). PK surrogate + UNIQUE (ver migração 0004 pro porquê)."""
+
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    paper_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("papers.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("runs.id", ondelete="SET NULL")
+    )
+    signal: Mapped[str] = mapped_column(Text, nullable=False)  # up | down | star
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("paper_id", "run_id", "signal"),)
