@@ -117,6 +117,8 @@ O Claude você já está logado (Max), então `reflect` funciona sem API key.
 
 ```bash
 uv run agent run -a "retrieval augmented generation"   # -n N limita a quantidade
+uv run agent run -a "intelligent systems"
+
 ```
 
 Traz papers novos (sem repetir o que já viu), re-ranqueados pelo seu perfil, com as
@@ -245,6 +247,36 @@ uv run agent run -a "retrieval augmented generation"   # só neste run (não edi
 > A *área* diz **onde** o agente pesca; o *perfil* (`user_profile`, construído por
 > `feedback`/`reflect`) diz **quais peixes** ele te mostra primeiro. Veja o perfil
 > com `agent profile`.
+
+#### Exemplos de assuntos — Sistemas Inteligentes
+
+Termos em **inglês** (o arXiv casa a frase no título/abstract dos papers, que são em
+inglês). Use com `-a`, ou fixe seu favorito em `default_area`:
+
+| Assunto (`-a "…"`) | Cobre | Categorias arXiv |
+|---|---|---|
+| `intelligent systems` | guarda-chuva amplo | cs.AI |
+| `multi-agent systems` | coordenação/competição entre agentes | cs.MA, cs.AI |
+| `autonomous agents` | agentes que agem sozinhos | cs.AI, cs.MA |
+| `reinforcement learning` | aprendizado por recompensa | cs.LG, cs.AI |
+| `neuro-symbolic reasoning` | une redes neurais + lógica | cs.AI, cs.LG |
+| `knowledge representation and reasoning` | KR&R clássico | cs.AI |
+| `self-adaptive systems` | sistemas que se ajustam sozinhos | cs.AI, cs.SE |
+| `swarm intelligence` | inteligência coletiva/enxame | cs.NE, cs.MA |
+| `evolutionary computation` | algoritmos evolutivos | cs.NE |
+| `explainable AI` | IA interpretável | cs.AI, cs.LG |
+| `cognitive architectures` | arquiteturas cognitivas | cs.AI |
+| `intelligent robotics` | robôs autônomos | cs.RO, cs.AI |
+
+```bash
+uv run agent run -a "multi-agent systems"
+uv run agent run -a "neuro-symbolic reasoning"
+```
+
+> **Saiu de IA/NLP/ML?** Aí ajuste também as `categories` no `config.toml` —
+> ex.: `cs.MA` (multi-agente), `cs.NE` (computação neural/evolutiva), `cs.RO`
+> (robótica), `cs.SE` (engenharia de software). Sem isso, a busca fica restrita a
+> cs.AI/cs.CL/cs.LG e pode perder papers da nova área.
 
 ---
 
