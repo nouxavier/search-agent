@@ -116,6 +116,9 @@ def query(
             f"    {r.hit.first_author or '—'} ({r.hit.year or '—'})  "
             f"sim≈{r.base_sim:.3f}  perfil≈{r.profile_affinity:.3f}  score={r.score:.3f}"
         )
+        snippet = _snippet(r.hit.abstract)
+        if snippet:
+            typer.secho(f"    {snippet}", dim=True)
 
 
 @app.command()
@@ -338,6 +341,16 @@ def smoke() -> None:
         max_tokens=64,
     )
     typer.secho(f"LLM ({cfg.llm.model_fast}): {out.strip()}", fg=typer.colors.GREEN)
+
+
+def _snippet(abstract: str | None, *, limit: int = 200) -> str:
+    """Resumo de uma linha: colapsa quebras e trunca em ~limit chars (corte por palavra)."""
+    if not abstract:
+        return ""
+    text_ = " ".join(abstract.split())
+    if len(text_) <= limit:
+        return text_
+    return text_[:limit].rsplit(" ", 1)[0] + "…"
 
 
 def _highlighted_ids(session, run_id: int) -> set[int]:

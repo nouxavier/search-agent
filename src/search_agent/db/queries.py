@@ -22,6 +22,7 @@ class Hit:
     first_author: str | None
     year: int | None
     distance: float
+    abstract: str | None = None
 
 
 def _vec_literal(vec: list[float]) -> str:
@@ -31,7 +32,7 @@ def _vec_literal(vec: list[float]) -> str:
 # CANDIDATE GEN — vetor kNN + filtro de metadata no MESMO SELECT (RFC §8, passo 1).
 _SEARCH_SQL = text(
     """
-    SELECT p.id, p.title, p.first_author, p.year,
+    SELECT p.id, p.title, p.first_author, p.year, p.abstract,
            (p.embedding <=> CAST(:qvec AS vector)) AS dist
     FROM papers p
     WHERE p.embedding IS NOT NULL
@@ -56,4 +57,7 @@ def search_similar(
         _SEARCH_SQL,
         {"qvec": _vec_literal(qvec), "area": area, "exclude_seen": exclude_seen, "k": k},
     ).all()
-    return [Hit(paper_id=r[0], title=r[1], first_author=r[2], year=r[3], distance=r[4]) for r in rows]
+    return [
+        Hit(paper_id=r[0], title=r[1], first_author=r[2], year=r[3], abstract=r[4], distance=r[5])
+        for r in rows
+    ]

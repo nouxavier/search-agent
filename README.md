@@ -141,7 +141,30 @@ uv run agent query "o que já vi sobre memória de agentes?"   # busca no que j�
 uv run agent query "graph retrieval" -k 5 --no-profile       # top-5, só similaridade
 ```
 
-`query` mostra `sim≈` (à consulta), `perfil≈` (afinidade ao perfil) e `score` (mistura).
+#### Os três números do `query`
+
+Cada resultado vem com `sim≈0.485  perfil≈0.247  score=0.401` — é por eles que a
+lista é ordenada:
+
+| Número | O que mede |
+|---|---|
+| `sim` | quanto o paper é **parecido com a sua consulta** (similaridade de cosseno do embedding) |
+| `perfil` | quanto o paper combina com o seu **gosto** (afinidade ao `user_profile`, ponderada por confidence) |
+| `score` | a **mistura** dos dois — o critério de ordenação |
+
+A fórmula ([read_path.py](src/search_agent/memory/read_path.py), `PROFILE_WEIGHT = 0.35`):
+
+```text
+score = 0.65 × sim + 0.35 × perfil
+0.65 × 0.485 + 0.35 × 0.247 = 0.401   ← o exemplo acima
+```
+
+Ou seja: **65% "é o que pedi" + 35% "é a minha cara"** — um paper pode subir mesmo
+sem ser o mais parecido, se bate forte com o seu perfil. Com `--no-profile`, o
+`perfil` é ignorado e `score = sim`. Perfil ainda vazio → `perfil≈0.000`.
+
+Abaixo de cada resultado o `query` ainda mostra um **resumo de uma linha** (início do
+abstract) pra você decidir se vale abrir o paper.
 
 ### Fim do dia/semana — consolidar e revisar
 
