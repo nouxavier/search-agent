@@ -104,6 +104,8 @@ def query(
 
     with session_scope() as session:
         ranked = recall(session, embedder, text_, k=k, area=area, use_profile=not no_profile)
+        # arxiv_id mora em external_ids — resolve aqui pra imprimir junto (abrir o paper).
+        arxiv = _arxiv_ids(session, [r.hit.paper_id for r in ranked]) if ranked else {}
 
     if not ranked:
         typer.secho("Nada no histórico ainda. Rode `agent run` primeiro.", fg=typer.colors.YELLOW)
@@ -111,9 +113,11 @@ def query(
 
     typer.secho(f'\nMais próximos de "{text_}"' + ("" if no_profile else " (re-ranqueado pelo perfil):"), bold=True)
     for i, r in enumerate(ranked, start=1):
+        aid = arxiv.get(r.hit.paper_id, "—")
         typer.secho(f"\n[{i}] {r.hit.title}", fg=typer.colors.CYAN, bold=True)
         typer.echo(
-            f"    {r.hit.first_author or '—'} ({r.hit.year or '—'})  "
+            f"    id={r.hit.paper_id}  arxiv_id={aid}  "
+            f"{r.hit.first_author or '—'} ({r.hit.year or '—'})  "
             f"sim≈{r.base_sim:.3f}  perfil≈{r.profile_affinity:.3f}  score={r.score:.3f}"
         )
 
@@ -346,6 +350,20 @@ def _highlighted_ids(session, run_id: int) -> set[int]:
         {"r": run_id},
     )
     return {row[0] for row in rows}
+
+
+def _arxiv_ids(session, paper_ids: list[int]) -> dict[int, str]:
+    """paper_id → arxiv_id (external_ids). Pra imprimir o id público e abrir o paper."""
+    if not paper_ids:
+        return {}
+    rows = session.execute(
+        text(
+            "SELECT paper_id, value FROM external_ids "
+            "WHERE kind='arxiv_id' AND paper_id = ANY(:ids)"
+        ),
+        {"ids": list(paper_ids)},
+    ).all()
+    return {r[0]: r[1] for r in rows}
 
 
 def _print_digest(area: str, digest, *, ingested_count: int, total: int, notes=None) -> None:
