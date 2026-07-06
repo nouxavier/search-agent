@@ -11,7 +11,10 @@ min_year = 2023          # filtro de write path (descarta sinal antigo) — usad
 [source]
 name = "arxiv"
 # Categorias arXiv usadas para montar a query quando a área não mapeia 1:1.
-categories = ["cs.AI", "cs.CL", "cs.LG"]
+# cs.AI = Inteligência Artificial        cs.CL = Linguagem/NLP (Computation and Language)
+# cs.LG = Machine Learning (Learning)    cs.DC = Sistemas Distribuídos/Paralelos
+# cs.DB = Bancos de Dados        
+categories = ["cs.AI", "cs.CL", "cs.LG", "cs.DC", "cs.DB"]
 
 [embedder]
 provider = "ollama"      # "ollama" | "fake"
