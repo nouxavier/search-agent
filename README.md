@@ -134,7 +134,7 @@ pontes relacionais do grafo. A saída imprime os `id=` e o `run #` que você usa
 ### Ao longo do dia — ensinar e consultar
 
 ```bash
-uv run agent feedback 27 -s up      # "me serviu"  (-s star pros TOP, -s down pra ruído)
+uv run agent feedback 93 -s up      # "me serviu"  (-s star pros TOP, -s down pra ruído up | down | star)
 uv run agent query "o que já vi sobre memória de agentes?"   # busca no que já leu
 uv run agent query "graph retrieval" -k 5 --no-profile       # top-5, só similaridade
 ```
